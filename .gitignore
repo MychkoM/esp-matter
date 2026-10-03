@@ -2,6 +2,8 @@
 compile_commands.json
 *.swp
 build/
+build-podman/
+.environment/
 sdkconfig
 sdkconfig.old
 dependencies.lock

@@ -1,5 +1,30 @@
 menu "ESP Matter Console"
 
+    config ESP_MATTER_CONSOLE_USE_ESP_CONSOLE
+        bool "Use ESP-IDF console REPL"
+        depends on ENABLE_CHIP_SHELL
+        depends on ESP_CONSOLE_UART_DEFAULT || ESP_CONSOLE_UART_CUSTOM || ESP_CONSOLE_USB_CDC || ESP_CONSOLE_USB_SERIAL_JTAG
+        default n
+        help
+            Use esp_console instead of the CHIP shell main loop. The console
+            uses the configured ESP-IDF UART or USB console transport and
+            accepts the same matter esp commands.
+
+    config ESP_MATTER_CONSOLE_NETWORK
+        bool "Enable test-only Telnet console"
+        depends on ESP_MATTER_CONSOLE_USE_ESP_CONSOLE && ENABLE_WIFI_STATION
+        default n
+        help
+            Expose matter esp commands and logs over Telnet, without TLS or
+            authentication. Use only in an isolated test LAN. Only one
+            network client is served. USB console remains available.
+
+    config ESP_MATTER_CONSOLE_NETWORK_PORT
+        depends on ESP_MATTER_CONSOLE_NETWORK
+        int "Telnet TCP port"
+        range 1 65535
+        default 23
+
     config ESP_MATTER_CONSOLE_TASK_STACK
         int "Task stack size"
         default 2048

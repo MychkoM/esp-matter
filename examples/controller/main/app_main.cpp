@@ -9,6 +9,8 @@
 #include <esp_err.h>
 #include <esp_log.h>
 #include <nvs_flash.h>
+#include <esp_wifi.h>
+#include <esp_netif.h>
 
 #include <esp_matter.h>
 #include <esp_matter_console.h>
@@ -52,8 +54,15 @@ static void app_event_cb(const ChipDeviceEvent *event, intptr_t arg)
         ESP_LOGI(TAG, "Interface IP Address changed");
         break;
     case chip::DeviceLayer::DeviceEventType::kESPSystemEvent:
+        if (event->Platform.ESPSystemEvent.Base == WIFI_EVENT &&
+            event->Platform.ESPSystemEvent.Id == WIFI_EVENT_STA_DISCONNECTED) {
+            ESP_LOGW(TAG, "Wi-Fi disconnected, reason=%u",
+                 event->Platform.ESPSystemEvent.Data.WiFiStaDisconnected.reason);
+        }
         if (event->Platform.ESPSystemEvent.Base == IP_EVENT &&
                 event->Platform.ESPSystemEvent.Id == IP_EVENT_STA_GOT_IP) {
+            const auto &ip_info = event->Platform.ESPSystemEvent.Data.IpGotIp.ip_info;
+            ESP_LOGI(TAG, "Wi-Fi IPv4: " IPSTR ", gateway: " IPSTR, IP2STR(&ip_info.ip), IP2STR(&ip_info.gw));
 #if CONFIG_OPENTHREAD_BORDER_ROUTER
             static bool sThreadBRInitialized = false;
             if (!sThreadBRInitialized) {
@@ -77,18 +86,6 @@ extern "C" void app_main()
 
     /* Initialize the ESP NVS layer */
     nvs_flash_init();
-#if CONFIG_ENABLE_CHIP_SHELL
-    esp_matter::console::diagnostics_register_commands();
-    esp_matter::console::wifi_register_commands();
-    esp_matter::console::factoryreset_register_commands();
-    esp_matter::console::init();
-#if CONFIG_ESP_MATTER_CONTROLLER_ENABLE
-    esp_matter::console::controller_register_commands();
-#endif // CONFIG_ESP_MATTER_CONTROLLER_ENABLE
-#ifdef CONFIG_OPENTHREAD_BORDER_ROUTER
-    esp_matter::console::otcli_register_commands();
-#endif // CONFIG_OPENTHREAD_BORDER_ROUTER
-#endif // CONFIG_ENABLE_CHIP_SHELL
 #ifdef CONFIG_OPENTHREAD_BORDER_ROUTER
 #ifdef CONFIG_AUTO_UPDATE_RCP
     esp_vfs_spiffs_conf_t rcp_fw_conf = {
@@ -132,11 +129,26 @@ extern "C" void app_main()
 #endif
 
 #if CONFIG_ESP_MATTER_COMMISSIONER_ENABLE
-    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-    esp_matter::controller::matter_controller_client::get_instance().init(112233, 1, 5580);
+    {
+        esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+        esp_matter::controller::matter_controller_client::get_instance().init(112233, 1, 5580);
 #ifdef CONFIG_CUSTOM_REVOKED_DAC_CHAIN_CHECK
-    chip::Credentials::set_custom_da_revocation_delegate(&s_custom_delegate);
+        chip::Credentials::set_custom_da_revocation_delegate(&s_custom_delegate);
 #endif
-    esp_matter::controller::matter_controller_client::get_instance().setup_commissioner();
+        esp_matter::controller::matter_controller_client::get_instance().setup_commissioner();
+    }
 #endif // CONFIG_ESP_MATTER_COMMISSIONER_ENABLE
+
+#if CONFIG_ENABLE_CHIP_SHELL
+    ESP_ERROR_CHECK(esp_matter::console::diagnostics_register_commands());
+    ESP_ERROR_CHECK(esp_matter::console::wifi_register_commands());
+    ESP_ERROR_CHECK(esp_matter::console::factoryreset_register_commands());
+#if CONFIG_ESP_MATTER_CONTROLLER_ENABLE
+    ESP_ERROR_CHECK(esp_matter::console::controller_register_commands());
+#endif
+#if CONFIG_OPENTHREAD_BORDER_ROUTER
+    ESP_ERROR_CHECK(esp_matter::console::otcli_register_commands());
+#endif
+    ESP_ERROR_CHECK(esp_matter::console::init());
+#endif
 }

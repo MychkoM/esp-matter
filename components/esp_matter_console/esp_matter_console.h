@@ -98,12 +98,21 @@ esp_err_t print_description(const command_t *command, void *arg);
 
 /** Initialize Console
  *
- * This API internally initializes the matter shell.
+ * Starts the ESP-IDF console REPL when ESP_MATTER_CONSOLE_USE_ESP_CONSOLE
+ * is enabled, otherwise initializes the Matter shell.
  *
  * @return ESP_OK on success.
  * @return error in case of failure.
  */
 esp_err_t init(void);
+
+#if CONFIG_ESP_MATTER_CONSOLE_USE_ESP_CONSOLE
+esp_err_t execute_command_line(char *line);
+#endif
+
+#if CONFIG_ESP_MATTER_CONSOLE_NETWORK
+esp_err_t network_start();
+#endif
 
 /** Add Console Command Set
  *

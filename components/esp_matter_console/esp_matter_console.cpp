@@ -20,6 +20,10 @@
 #include <esp_matter_console.h>
 #include <lib/shell/Engine.h>
 #include <lib/core/CHIPError.h>
+#if CONFIG_ESP_MATTER_CONSOLE_USE_ESP_CONSOLE
+#include <esp_console.h>
+#include <freertos/semphr.h>
+#endif
 
 namespace esp_matter {
 namespace console {
@@ -105,6 +109,82 @@ static esp_err_t register_default_commands()
     return add_commands(&command, 1);
 }
 
+#if CONFIG_ESP_MATTER_CONSOLE_USE_ESP_CONSOLE
+static SemaphoreHandle_t command_mutex;
+
+static int matter_handler(int argc, char **argv)
+{
+    if (argc < 2 || strcmp(argv[1], "esp") != 0) {
+        ESP_LOGE(TAG, "Usage: matter esp <sub_command>");
+        return ESP_ERR_INVALID_ARG;
+    }
+    xSemaphoreTake(command_mutex, portMAX_DELAY);
+    esp_err_t result = argc == 2 ? help_handler(0, nullptr) : base_engine.exec_command(argc - 2, &argv[2]);
+    xSemaphoreGive(command_mutex);
+    return result;
+}
+
+esp_err_t execute_command_line(char *line)
+{
+    if (!line || !command_mutex) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    char *arguments[33];
+    size_t count = esp_console_split_argv(line, arguments, 33);
+    if (count == 0 || count == 33 || strcmp(arguments[0], "matter") != 0) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return matter_handler(count, arguments);
+}
+
+static esp_err_t start_repl()
+{
+    command_mutex = xSemaphoreCreateMutex();
+    if (!command_mutex) {
+        return ESP_ERR_NO_MEM;
+    }
+    esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
+    repl_config.prompt = "matter>";
+    repl_config.task_stack_size = CONFIG_ESP_MATTER_CONSOLE_TASK_STACK;
+    repl_config.max_cmdline_length = CONFIG_CHIP_SHELL_CMD_LINE_BUF_MAX_LENGTH;
+    esp_console_repl_t *repl = nullptr;
+    esp_err_t err;
+#if CONFIG_ESP_CONSOLE_USB_CDC
+    esp_console_dev_usb_cdc_config_t dev_config = ESP_CONSOLE_DEV_CDC_CONFIG_DEFAULT();
+    err = esp_console_new_repl_usb_cdc(&dev_config, &repl_config, &repl);
+#elif CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+    esp_console_dev_usb_serial_jtag_config_t dev_config = ESP_CONSOLE_DEV_USB_SERIAL_JTAG_CONFIG_DEFAULT();
+    err = esp_console_new_repl_usb_serial_jtag(&dev_config, &repl_config, &repl);
+#elif CONFIG_ESP_CONSOLE_UART_DEFAULT || CONFIG_ESP_CONSOLE_UART_CUSTOM
+    esp_console_dev_uart_config_t dev_config = ESP_CONSOLE_DEV_UART_CONFIG_DEFAULT();
+    err = esp_console_new_repl_uart(&dev_config, &repl_config, &repl);
+#else
+#error "ESP Matter console REPL requires a UART, USB CDC or USB Serial/JTAG console"
+#endif
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    err = esp_console_register_help_command();
+    if (err == ESP_OK) {
+        const esp_console_cmd_t command = {
+            .command = "matter",
+            .help = "Matter commands. Usage: matter esp <sub_command>",
+            .hint = nullptr,
+            .func = matter_handler,
+            .argtable = nullptr,
+        };
+        err = esp_console_cmd_register(&command);
+    }
+    if (err == ESP_OK) {
+        err = esp_console_start_repl(repl);
+    }
+    if (err != ESP_OK) {
+        repl->del(repl);
+    }
+    return err;
+}
+#else
 static CHIP_ERROR common_handler(int argc, char **argv)
 {
     /* This common handler is added to avoid adding `CHIP_ERROR` and its component requirements in other esp-matter
@@ -134,6 +214,7 @@ static void ChipShellTask(void *args)
 {
     chip::Shell::Engine::Root().RunMainLoop();
 }
+#endif
 
 esp_err_t init()
 {
@@ -141,7 +222,17 @@ esp_err_t init()
     err = register_default_commands();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Couldn't register default console commands");
+        return err;
     }
+#if CONFIG_ESP_MATTER_CONSOLE_USE_ESP_CONSOLE
+    err = start_repl();
+#if CONFIG_ESP_MATTER_CONSOLE_NETWORK
+    if (err == ESP_OK) {
+        err = network_start();
+    }
+#endif
+    return err;
+#else
     err = register_common_shell_handler();
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "Couldn't register common handler");
@@ -153,6 +244,7 @@ esp_err_t init()
         err = ESP_FAIL;
     }
     return err;
+#endif
 }
 
 } // namespace console

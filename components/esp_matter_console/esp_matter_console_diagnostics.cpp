@@ -26,20 +26,20 @@ static engine diagnostics_console;
 
 static esp_err_t mem_dump_console_handler(int argc, char *argv[])
 {
-    printf("\tDescription\tInternal\tSPIRAM\n");
-    printf("Current Free Memory\t%d\t\t%d\n",
-           heap_caps_get_free_size(MALLOC_CAP_8BIT) - heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
-           heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
-    printf("Largest Free Block\t%d\t\t%d\n", heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
-           heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
-    printf("Min. Ever Free Size\t%d\t\t%d\n", heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
-           heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
+    ESP_LOGI(TAG, "\tDescription\tInternal\tSPIRAM");
+    ESP_LOGI(TAG, "Current Free Memory\t%zu\t\t%zu",
+          heap_caps_get_free_size(MALLOC_CAP_8BIT) - heap_caps_get_free_size(MALLOC_CAP_SPIRAM),
+          heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    ESP_LOGI(TAG, "Largest Free Block\t%zu\t\t%zu", heap_caps_get_largest_free_block(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
+          heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+    ESP_LOGI(TAG, "Min. Ever Free Size\t%zu\t\t%zu", heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL),
+          heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM));
     return ESP_OK;
 }
 
 static esp_err_t up_time_console_handler(int argc, char *argv[])
 {
-    printf("%s: Uptime of the device: %lld milliseconds\n", TAG, esp_timer_get_time() / 1000);
+    ESP_LOGI(TAG, "Uptime of the device: %lld milliseconds", esp_timer_get_time() / 1000);
     return ESP_OK;
 }
 

@@ -1,0 +1,100 @@
+name: Build Controller
+
+on:
+  workflow_dispatch:
+    inputs:
+      idf_version:
+        description: ESP-IDF version
+        type: choice
+        default: v6.0.2
+        options:
+          - v6.0.2
+          - v5.5.5
+      psram_mode:
+        description: ESP32-S3 module PSRAM mode
+        type: choice
+        default: octal
+        options:
+          - octal
+          - quad
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    container:
+      image: espressif/idf:${{ inputs.idf_version }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      ESP_MATTER_PATH: ${{ github.workspace }}
+      PSRAM_MODE: ${{ inputs.psram_mode }}
+
+    steps:
+      - name: Checkout repository and Matter submodule
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Install Matter bootstrap dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            curl unzip xz-utils pkg-config libssl-dev libglib2.0-dev \
+            libdbus-1-dev libreadline-dev
+
+      - name: Checkout platform dependencies
+        working-directory: connectedhomeip/connectedhomeip
+        run: |
+          python3 scripts/checkout_submodules.py --platform esp32 linux --shallow
+
+      - name: Install Matter build tools
+        run: |
+          . "$IDF_PATH/export.sh"
+          ./install.sh --no-host-tool
+
+      - name: Build ESP32-S3 controller
+        working-directory: examples/controller
+        run: |
+          . "$IDF_PATH/export.sh"
+          . "$ESP_MATTER_PATH/export.sh"
+          case "$PSRAM_MODE" in
+            octal)
+              printf '%s\n' 'CONFIG_SPIRAM_MODE_OCT=y' 'CONFIG_SPIRAM_MODE_QUAD=n' > sdkconfig.ci
+              ;;
+            quad)
+              printf '%s\n' 'CONFIG_SPIRAM_MODE_OCT=n' 'CONFIG_SPIRAM_MODE_QUAD=y' > sdkconfig.ci
+              ;;
+            *) exit 1 ;;
+          esac
+          idf.py -D 'SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.ci' \
+            set-target esp32s3 build 2>&1 | tee build.log
+
+      - name: Upload firmware
+        uses: actions/upload-artifact@v4
+        with:
+          name: controller-esp32s3-${{ inputs.psram_mode }}-${{ inputs.idf_version }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            examples/controller/build/**/*.bin
+            examples/controller/build/controller.elf
+            examples/controller/build/controller.map
+            examples/controller/build/flash_args
+            examples/controller/build/flasher_args.json
+            examples/controller/build/project_description.json
+            examples/controller/sdkconfig
+
+      - name: Upload build log
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: controller-build-log-${{ inputs.psram_mode }}-${{ inputs.idf_version }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: examples/controller/build.log
