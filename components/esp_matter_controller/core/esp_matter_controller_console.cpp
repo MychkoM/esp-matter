@@ -17,6 +17,7 @@
 
 #include <inttypes.h>
 #include <esp_check.h>
+#include <esp_matter_core.h>
 #include <esp_matter_controller_client.h>
 #include <esp_matter_controller_cluster_command.h>
 #include <esp_matter_controller_commissioning_window_opener.h>
@@ -600,6 +601,9 @@ static esp_err_t controller_icd_list_handler(int argc, char **argv)
 
 static esp_err_t controller_dispatch(int argc, char **argv)
 {
+#if CONFIG_ESP_MATTER_CONSOLE_USE_ESP_CONSOLE
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+#endif
     if (argc == 0) {
         return controller_help_handler(argc, argv);
     }

@@ -81,6 +81,28 @@ static esp_err_t wifi_status_handler(int argc, char *argv[])
     return ESP_OK;
 }
 
+static esp_err_t wifi_restart_handler(int argc, char *argv[])
+{
+    ESP_RETURN_ON_FALSE(argc == 0, ESP_ERR_INVALID_ARG, TAG, "Incorrect arguments");
+    esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+    auto &connectivity = chip::DeviceLayer::ConnectivityMgr();
+    const auto previous_mode = connectivity.GetWiFiStationMode();
+    CHIP_ERROR mode_err = connectivity.SetWiFiStationMode(
+        chip::DeviceLayer::ConnectivityManager::kWiFiStationMode_ApplicationControlled);
+    ESP_RETURN_ON_FALSE(mode_err == CHIP_NO_ERROR, ESP_FAIL, TAG, "Failed to pause automatic connection");
+
+    // Stop/start retains the driver configuration; do not replace the saved credentials.
+    esp_err_t err = esp_wifi_stop();
+    if (err == ESP_OK) {
+        err = esp_wifi_start();
+    }
+    mode_err = connectivity.SetWiFiStationMode(previous_mode);
+    ESP_RETURN_ON_ERROR(err, TAG, "WiFi restart failed");
+    ESP_RETURN_ON_FALSE(mode_err == CHIP_NO_ERROR, ESP_FAIL, TAG, "Failed to restore automatic connection");
+    ESP_LOGI(TAG, "WiFi driver restarted with existing configuration; wait for the IP address event");
+    return ESP_OK;
+}
+
 static esp_err_t wifi_scan_handler(int argc, char *argv[])
 {
     ESP_RETURN_ON_FALSE(argc == 0, ESP_ERR_INVALID_ARG, TAG, "Incorrect arguments");
@@ -150,6 +172,11 @@ esp_err_t wifi_register_commands()
             .name = "status",
             .description = "Show configured SSID, country, DHCP and IP. Usage: matter esp wifi status.",
             .handler = wifi_status_handler,
+        },
+        {
+            .name = "restart",
+            .description = "Restart WiFi with existing credentials (disconnects Telnet). Usage: matter esp wifi restart.",
+            .handler = wifi_restart_handler,
         },
         {
             .name = "scan",

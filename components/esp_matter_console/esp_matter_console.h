@@ -112,6 +112,7 @@ esp_err_t execute_command_line(char *line);
 
 #if CONFIG_ESP_MATTER_CONSOLE_NETWORK
 esp_err_t network_start();
+void network_write(const char *data, size_t length);
 #endif
 
 /** Add Console Command Set

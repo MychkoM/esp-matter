@@ -12,8 +12,10 @@
 #include <cerrno>
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <memory>
 
 namespace esp_matter {
 namespace console {
@@ -24,15 +26,38 @@ static uint64_t log_end;
 static portMUX_TYPE log_lock = portMUX_INITIALIZER_UNLOCKED;
 static vprintf_like_t original_logger = vprintf;
 
+void network_write(const char *data, size_t length)
+{
+    portENTER_CRITICAL(&log_lock);
+    for (size_t index = 0; index < length; ++index) {
+        log_buffer[log_end++ % sizeof(log_buffer)] = data[index];
+    }
+    portEXIT_CRITICAL(&log_lock);
+}
+
 static int capture_log(const char *format, va_list arguments)
 {
-    char message[512];
+    char buffer[512];
+    const char *message = buffer;
+    std::unique_ptr<char, decltype(&free)> full_message(nullptr, free);
     va_list copy;
     va_copy(copy, arguments);
-    int length = vsnprintf(message, sizeof(message), format, copy);
+    int length = vsnprintf(buffer, sizeof(buffer), format, copy);
     va_end(copy);
     if (length > 0) {
-        size_t count = static_cast<size_t>(length) < sizeof(message) ? length : sizeof(message) - 1;
+        size_t count = static_cast<size_t>(length);
+        if (count >= sizeof(buffer)) {
+            full_message.reset(static_cast<char *>(malloc(count + 1)));
+            if (full_message) {
+                message = full_message.get();
+                va_copy(copy, arguments);
+                vsnprintf(full_message.get(), count + 1, format, copy);
+                va_end(copy);
+            } else {
+                message = "[log dropped: insufficient memory]\n";
+                count = strlen(message);
+            }
+        }
         char level = 0;
         unsigned long long timestamp = 0;
         char tag[64] = {};
@@ -48,11 +73,7 @@ static int capture_log(const char *format, va_list arguments)
                 ++start;
             }
         }
-        portENTER_CRITICAL(&log_lock);
-        for (size_t index = start; index < count; ++index) {
-            log_buffer[log_end++ % sizeof(log_buffer)] = message[index];
-        }
-        portEXIT_CRITICAL(&log_lock);
+        network_write(message + start, count - start);
     }
     return original_logger(format, arguments);
 }
@@ -88,12 +109,12 @@ static bool send_bytes(int peer, const char *bytes, size_t length)
     return sent == length;
 }
 
-static bool send_text(int peer, const char *text, size_t length)
+static bool send_text(int peer, const char *text, size_t length, bool previous_was_cr = false)
 {
     size_t start = 0;
     for (size_t index = 0; index < length; ++index) {
         unsigned char value = text[index];
-        bool newline = value == '\n' && (index == 0 || text[index - 1] != '\r');
+        bool newline = value == '\n' && (index == 0 ? !previous_was_cr : text[index - 1] != '\r');
         if (value == 255 || newline) {
             if (!send_bytes(peer, text + start, index - start)) {
                 return false;
@@ -122,11 +143,15 @@ static bool send_logs(int peer, uint64_t &cursor)
     while (cursor < end) {
         size_t count = 0;
         bool dropped = false;
+        bool previous_was_cr = false;
         portENTER_CRITICAL(&log_lock);
         uint64_t first = log_end > sizeof(log_buffer) ? log_end - sizeof(log_buffer) : 0;
         if (cursor < first) {
             cursor = first;
             dropped = true;
+        }
+        if (cursor > first) {
+            previous_was_cr = log_buffer[(cursor - 1) % sizeof(log_buffer)] == '\r';
         }
         while (cursor < end && count < sizeof(chunk)) {
             chunk[count++] = log_buffer[cursor++ % sizeof(log_buffer)];
@@ -135,7 +160,7 @@ static bool send_logs(int peer, uint64_t &cursor)
         if (dropped && !send_text(peer, "\r\n[older logs dropped]\r\n")) {
             return false;
         }
-        if (!send_text(peer, chunk, count)) {
+        if (!send_text(peer, chunk, count, previous_was_cr)) {
             return false;
         }
     }

@@ -1,5 +1,8 @@
 # Controller
 
+For daily operation, see the [C6 controller user guide](../../CONTROLLER_USER_GUIDE.md)
+for Wi-Fi, Thread, BLE commissioning, onnetwork commissioning and device control.
+
 This example creates a Matter Controller using the ESP Matter data model.
 
 
@@ -39,6 +42,17 @@ the same directory. Use the configured console baud rate (115200 by default).
 
 ### 1.2 ESP32-C6 with 4 MB flash
 
+The current C6 defaults enable a standalone native-radio Thread Border Router
+and NimBLE commissioning, retaining Wi-Fi for the console. The controller's own
+Thread network, dataset persistence, BILRESA commissioning and Nordic
+BLE-Thread/onnetwork commissioning are hardware-verified. Explicit Wi-Fi/Thread
+coexistence initialization restored automatic Wi-Fi connection and Telnet access.
+See the operating procedures and remaining restart/output limitations in the
+[user guide](../../CONTROLLER_USER_GUIDE.md), and build/patch details in
+[the C6 guide](../../CONTROLLER_HANDOVER.md).
+The earlier Wi-Fi-only build and its on-network checks do not verify this new
+profile. No external Home Assistant OTBR dataset is used.
+
 Use the standalone C6 defaults instead of the base S3/PSRAM defaults:
 
 ```sh
@@ -48,9 +62,14 @@ idf.py -B build/esp32c6 -p <PORT> flash monitor
 ```
 
 This profile uses the native USB Serial/JTAG console, internal RAM, and a
-4 MB partition table with a single application slot. BLE commissioning and
-dual-slot OTA are not available. Connect both controller and device to Wi-Fi,
-open the device's commissioning window, and use `pairing onnetwork` as below.
+4 MB partition table with a single application slot; dual-slot OTA is not
+available. The new `matter esp thread info` and
+`matter esp thread pair <node-id> <setup-code>` commands inspect the controller's
+own network and commission a Thread device with its internal dataset, without
+printing network keys. Open the device's commissioning window before pairing.
+An accepted command is not proof of commissioning success. For devices
+already reachable over IP, open their commissioning window and use
+`pairing onnetwork` as below.
 The GitHub workflow above currently builds only the ESP32-S3 profile.
 
 ## 2. Controller Example
@@ -65,10 +84,32 @@ UART or USB console transport. Open it with `idf.py -p <PORT> monitor` after
 flashing. The prompt appears after Matter and the commissioner are initialized.
 Use `help`, `matter esp help`, or `matter esp controller help` to list commands.
 
+The ESP-IDF REPL also exposes native CHIP Shell commands under `matter`.
+`matter help` lists them on both USB and Telnet; standalone Telnet `help`
+is a shortcut for that list. For example:
+
+```text
+matter version
+matter dns help
+matter dns browse help
+matter dns browse commissioner
+matter dns browse stop
+matter device help
+matter config help
+matter config vendorid
+matter config productid
+matter stat peak
+```
+
+CHIP Shell output is mirrored to USB and Telnet. mDNS browse results are
+asynchronous; stop browsing when finished. Commands such as `matter config`
+without arguments, `matter config pincode`, and `matter onboardingcodes`
+print commissioning credentials; do not include their output in shared logs.
+
 The controller defaults also enable a test-only Telnet console on TCP port 23.
 After Wi-Fi obtains an address, connect with `telnet <IP> 23`; USB remains
 available. Use `matter esp terminal info` to print the address and port.
-Telnet accepts the same `matter esp ...` commands and streams logs. It returns
+Telnet accepts CHIP and `matter esp ...` commands and streams logs. It returns
 `RESULT ESP_OK` or `RESULT ESP_ERR_...` followed by `matter>` for each nonempty
 command. Asynchronous Matter operations may finish later; check their logs.
 The server negotiates Telnet echo and echoes input; avoid duplicate local
@@ -100,6 +141,8 @@ press `Ctrl+]`, then enter `quit`.
 Telnet Interrupt Process also closes it. A client message saying
 `Connection closed by foreign host` after Ctrl+C is expected.
 This does not cancel a Matter operation already started.
+`matter exit` returns `ESP_ERR_NOT_SUPPORTED`, because the native CHIP command
+would exit the application rather than just close the network session.
 
 Connect the controller to the same Wi-Fi network as the end-device and wait for
 the IP address event before pairing:
@@ -138,6 +181,8 @@ in bytes, with `Internal` and `SPIRAM` columns. SPIRAM values are zero on
 the C6 board without PSRAM. Telnet returns the data before `RESULT ESP_OK`.
 These handlers use `ESP_LOGI`, as direct `printf` output is not captured by
 the Telnet log hook. Keep INFO logging enabled for these command responses.
+Long help messages are captured in full rather than truncated at 511 bytes;
+CRLF is preserved across log chunks.
 
 For a device already on that network, open its commissioning window, then pair
 it with an unused node ID and its actual setup PIN:
@@ -279,3 +324,24 @@ The controller is RAM heavy, so `sdkconfig.defaults` puts the Wi-Fi/LWIP, NimBLE
 
 -   `sdkconfig.defaults` uses octal PSRAM (`CONFIG_SPIRAM_MODE_OCT=y`). If the device crashes at startup with `PSRAM chip not found or not supported, or wrong PSRAM line mode`, set the mode that matches your module, e.g. `CONFIG_SPIRAM_MODE_QUAD=y` for a 2 MB quad-PSRAM part.
 -   See [Configuration options to optimize RAM and Flash](https://docs.espressif.com/projects/esp-matter/en/latest/esp32/optimizations.html) for further options.
+
+### Native C6 Wi-Fi and Thread coexistence
+
+The controller explicitly enables Wi-Fi/802.15.4 coexistence with
+`esp_coex_wifi_i154_enable()` after starting its own native Thread network.
+Without this initialization, the tested C6 repeatedly reported Wi-Fi
+NO_AP_FOUND (reason 201), including after driver restart. With it, the board
+connected automatically after the app-only update, obtained 192.168.1.194,
+and served Telnet on TCP 23 while BLE advertising remained disabled.
+
+Use `matter esp wifi status`, `matter esp terminal info`, and
+`matter esp thread info` through Telnet. `matter esp wifi restart` deliberately
+drops the current session; reconnect after Wi-Fi obtains its address again.
+NVS and the controller's fabric are preserved by the restart.
+
+Final full-restart verification passed again over Telnet: automatic Wi-Fi
+connection and new CASE/attribute reads for both nodes 2489 and 52840.
+A separate Wi-Fi driver restart followed by Thread stop/start exposed stale
+Matter addresses/routing errors; a full controller restart restored both nodes.
+That warm-restart routing issue remains unresolved. Leave the running network
+intact for normal Telnet operation.

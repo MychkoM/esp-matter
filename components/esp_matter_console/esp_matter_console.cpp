@@ -23,6 +23,44 @@
 #if CONFIG_ESP_MATTER_CONSOLE_USE_ESP_CONSOLE
 #include <esp_console.h>
 #include <freertos/semphr.h>
+#include <esp_matter_core.h>
+#include <cstdio>
+
+namespace chip {
+namespace Shell {
+
+static int console_stream_init(streamer_t *)
+{
+    return 0;
+}
+
+static ssize_t console_stream_read(streamer_t *, char *, size_t)
+{
+    return 0;
+}
+
+static ssize_t console_stream_write(streamer_t *, const char *data, size_t length)
+{
+#if CONFIG_ESP_MATTER_CONSOLE_NETWORK
+    esp_matter::console::network_write(data, length);
+#endif
+    size_t written = fwrite(data, 1, length, stdout);
+    fflush(stdout);
+    return written;
+}
+
+streamer_t *streamer_get()
+{
+    static streamer_t stream = {
+        .init_cb = console_stream_init,
+        .read_cb = console_stream_read,
+        .write_cb = console_stream_write,
+    };
+    return &stream;
+}
+
+} // namespace Shell
+} // namespace chip
 #endif
 
 namespace esp_matter {
@@ -112,14 +150,40 @@ static esp_err_t register_default_commands()
 #if CONFIG_ESP_MATTER_CONSOLE_USE_ESP_CONSOLE
 static SemaphoreHandle_t command_mutex;
 
+static CHIP_ERROR esp_shell_handler(int argc, char **argv)
+{
+    return map_matter_error(argc == 0 ? help_handler(0, nullptr) : base_engine.exec_command(argc, argv));
+}
+
 static int matter_handler(int argc, char **argv)
 {
-    if (argc < 2 || strcmp(argv[1], "esp") != 0) {
-        ESP_LOGE(TAG, "Usage: matter esp <sub_command>");
+    if (argc < 1) {
         return ESP_ERR_INVALID_ARG;
     }
     xSemaphoreTake(command_mutex, portMAX_DELAY);
-    esp_err_t result = argc == 2 ? help_handler(0, nullptr) : base_engine.exec_command(argc - 2, &argv[2]);
+    esp_err_t result;
+    if (argc >= 2 && strcmp(argv[1], "esp") == 0) {
+        result = argc == 2 ? help_handler(0, nullptr) : base_engine.exec_command(argc - 2, &argv[2]);
+    } else if (argc >= 2 && strcmp(argv[1], "exit") == 0) {
+        ESP_LOGE(TAG, "Use Ctrl+C, Ctrl+D or the Telnet client quit command to close the session");
+        result = ESP_ERR_NOT_SUPPORTED;
+    } else {
+        esp_matter::lock::ScopedChipStackLock stack_lock(portMAX_DELAY);
+        char help[] = "help";
+        char *help_arguments[] = {help};
+        CHIP_ERROR error = chip::Shell::Engine::Root().ExecCommand(argc == 1 ? 1 : argc - 1,
+                                                                  argc == 1 ? help_arguments : argv + 1);
+        if (error == CHIP_NO_ERROR) {
+            result = ESP_OK;
+        } else if (error == CHIP_ERROR_INVALID_ARGUMENT) {
+            result = ESP_ERR_INVALID_ARG;
+        } else if (error == CHIP_ERROR_NOT_IMPLEMENTED) {
+            result = ESP_ERR_NOT_SUPPORTED;
+        } else {
+            ESP_LOGE(TAG, "CHIP command failed: %" CHIP_ERROR_FORMAT, error.Format());
+            result = ESP_FAIL;
+        }
+    }
     xSemaphoreGive(command_mutex);
     return result;
 }
@@ -131,6 +195,11 @@ esp_err_t execute_command_line(char *line)
     }
     char *arguments[33];
     size_t count = esp_console_split_argv(line, arguments, 33);
+    if (count == 1 && strcmp(arguments[0], "help") == 0) {
+        char matter[] = "matter";
+        char *help_arguments[] = {matter, arguments[0]};
+        return matter_handler(2, help_arguments);
+    }
     if (count == 0 || count == 33 || strcmp(arguments[0], "matter") != 0) {
         return ESP_ERR_INVALID_ARG;
     }
@@ -143,6 +212,13 @@ static esp_err_t start_repl()
     if (!command_mutex) {
         return ESP_ERR_NO_MEM;
     }
+    chip::Shell::Engine::Root().RegisterDefaultCommands();
+    static chip::Shell::shell_command_t esp_command = {
+        .cmd_func = esp_shell_handler,
+        .cmd_name = "esp",
+        .cmd_help = "ESP Matter commands. Usage: matter esp <sub_command>",
+    };
+    chip::Shell::Engine::Root().RegisterCommands(&esp_command, 1);
     esp_console_repl_config_t repl_config = ESP_CONSOLE_REPL_CONFIG_DEFAULT();
     repl_config.prompt = "matter>";
     repl_config.task_stack_size = CONFIG_ESP_MATTER_CONSOLE_TASK_STACK;
@@ -169,7 +245,7 @@ static esp_err_t start_repl()
     if (err == ESP_OK) {
         const esp_console_cmd_t command = {
             .command = "matter",
-            .help = "Matter commands. Usage: matter esp <sub_command>",
+            .help = "Matter and CHIP commands. Usage: matter <sub_command>",
             .hint = nullptr,
             .func = matter_handler,
             .argtable = nullptr,
